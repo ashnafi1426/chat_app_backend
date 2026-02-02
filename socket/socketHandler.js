@@ -259,6 +259,95 @@ export const initializeSocket = (io) => {
       });
     });
     
+    // ===============================
+    // MESSAGE EDIT/DELETE/REACTION EVENTS
+    // ===============================
+    
+    // Handle message edit
+    socket.on('message-edited', async (data) => {
+      try {
+        const { message_id, conversation_id, content } = data;
+        
+        // Verify user is a participant
+        const isParticipant = await verifyParticipant(conversation_id, socket.userId);
+        if (!isParticipant) {
+          return;
+        }
+        
+        // Broadcast edit to all participants in the conversation
+        io.to(conversation_id).emit('message-edited', {
+          message_id,
+          content,
+          is_edited: true,
+          updated_at: new Date().toISOString(),
+          editor_id: socket.userId,
+        });
+      } catch (error) {
+        console.error('[Socket] Error handling message-edited:', error);
+      }
+    });
+    
+    // Handle message delete
+    socket.on('message-deleted', async (data) => {
+      try {
+        const { message_id, conversation_id } = data;
+        
+        // Verify user is a participant
+        const isParticipant = await verifyParticipant(conversation_id, socket.userId);
+        if (!isParticipant) {
+          return;
+        }
+        
+        // Broadcast delete to all participants in the conversation
+        io.to(conversation_id).emit('message-deleted', {
+          message_id,
+          deleted_by: socket.userId,
+          deleted_at: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error('[Socket] Error handling message-deleted:', error);
+      }
+    });
+    
+    // Handle reaction add/remove
+    socket.on('reaction-toggle', async (data) => {
+      try {
+        const { message_id, conversation_id, emoji } = data;
+        
+        // Verify user is a participant
+        const isParticipant = await verifyParticipant(conversation_id, socket.userId);
+        if (!isParticipant) {
+          return;
+        }
+        
+        // Get sender user data
+        const { data: senderData } = await supabaseAdmin
+          .from('users')
+          .select('id, username, display_name, avatar_url')
+          .eq('id', socket.userId)
+          .single();
+        
+        // Broadcast reaction toggle to all participants
+        io.to(conversation_id).emit('reaction-toggled', {
+          message_id,
+          user_id: socket.userId,
+          user: senderData || {
+            id: socket.userId,
+            username: socket.username,
+            display_name: socket.username,
+          },
+          emoji,
+          timestamp: new Date().toISOString(),
+        });
+      } catch (error) {
+        console.error('[Socket] Error handling reaction-toggle:', error);
+      }
+    });
+    
+    // ===============================
+    // END MESSAGE EDIT/DELETE/REACTION EVENTS
+    // ===============================
+    
     // Handle status update
     socket.on('status-update', async (status) => {
       await updateUserStatus(socket.userId, status);

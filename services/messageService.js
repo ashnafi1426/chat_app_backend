@@ -81,7 +81,21 @@ export class MessageService {
 
     let query = supabaseAdmin
       .from('messages')
-      .select('*')
+      .select(`
+        *,
+        reactions:message_reactions (
+          id,
+          emoji,
+          user_id,
+          created_at,
+          user:users (
+            id,
+            username,
+            display_name,
+            avatar_url
+          )
+        )
+      `)
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -188,6 +202,7 @@ export class MessageService {
   // REACTIONS
   // ===============================
   static async addReaction(messageId, userId, emoji) {
+    // Check if reaction already exists
     const { data: existing } = await supabaseAdmin
       .from('message_reactions')
       .select('id')
@@ -197,17 +212,27 @@ export class MessageService {
       .single();
 
     if (existing) {
+      // Remove reaction (toggle off)
       await supabaseAdmin
         .from('message_reactions')
         .delete()
         .eq('id', existing.id);
-      return null;
+      return null; // Return null to indicate removal
     }
 
+    // Add new reaction
     const { data, error } = await supabaseAdmin
       .from('message_reactions')
       .insert({ message_id: messageId, user_id: userId, emoji })
-      .select()
+      .select(`
+        *,
+        user:users (
+          id,
+          username,
+          display_name,
+          avatar_url
+        )
+      `)
       .single();
 
     if (error) throw new Error(error.message);
