@@ -372,19 +372,38 @@ export const initializeSocket = (io) => {
 // Helper function to join user's conversations
 async function joinUserConversations(socket) {
   try {
-    const { data: participants } = await supabaseAdmin
+    console.log(`[Socket] ===== JOINING CONVERSATIONS =====`);
+    console.log(`[Socket] User: ${socket.username} (${socket.userId})`);
+    
+    const { data: participants, error } = await supabaseAdmin
       .from('conversation_participants')
       .select('conversation_id')
       .eq('user_id', socket.userId);
     
-    if (participants) {
-      participants.forEach(p => {
-        socket.join(p.conversation_id);
-      });
-      console.log(`[v0] ${socket.username} auto-joined ${participants.length} conversations`);
+    if (error) {
+      console.error('[Socket] ❌ ERROR querying conversation_participants:', error);
+      console.log(`[Socket] ===== END JOINING CONVERSATIONS =====`);
+      return;
     }
+    
+    if (!participants || participants.length === 0) {
+      console.log(`[Socket] ⚠️ User ${socket.username} has NO conversations in database`);
+      console.log(`[Socket] This user needs to create or be added to a conversation first`);
+      console.log(`[Socket] ===== END JOINING CONVERSATIONS =====`);
+      return;
+    }
+    
+    console.log(`[Socket] Found ${participants.length} conversations for ${socket.username}`);
+    participants.forEach(p => {
+      socket.join(p.conversation_id);
+      console.log(`[Socket] ✅ ${socket.username} joined room: ${p.conversation_id}`);
+    });
+    
+    console.log(`[Socket] ✅ ${socket.username} successfully joined ${participants.length} conversations`);
+    console.log(`[Socket] ===== END JOINING CONVERSATIONS =====`);
   } catch (error) {
-    console.error('[v0] Error joining user conversations:', error);
+    console.error('[Socket] ❌ CRITICAL ERROR joining conversations:', error);
+    console.log(`[Socket] ===== END JOINING CONVERSATIONS =====`);
   }
 }
 

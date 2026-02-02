@@ -161,6 +161,27 @@ export class ConversationService {
       });
     }
 
+    // Fetch last message for each conversation
+    const { data: lastMessages, error: messagesError } = await supabaseAdmin
+      .from('messages')
+      .select('id, conversation_id, sender_id, content, created_at')
+      .in('conversation_id', conversationIds)
+      .order('created_at', { ascending: false });
+
+    if (messagesError) {
+      console.error('[ConversationService] Error loading last messages:', messagesError);
+    }
+
+    // Create a map of last message for each conversation
+    const lastMessageMap = {};
+    if (lastMessages) {
+      lastMessages.forEach(msg => {
+        if (!lastMessageMap[msg.conversation_id]) {
+          lastMessageMap[msg.conversation_id] = msg;
+        }
+      });
+    }
+
     // Combine data
     return conversations.map(conv => {
       const userRole = userConvos.find(uc => uc.conversation_id === conv.id)?.role;
@@ -177,7 +198,8 @@ export class ConversationService {
       return {
         ...conv,
         role: userRole,
-        participants
+        participants,
+        last_message: lastMessageMap[conv.id] || null
       };
     });
   }

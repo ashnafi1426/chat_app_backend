@@ -81,21 +81,7 @@ export class MessageService {
 
     let query = supabaseAdmin
       .from('messages')
-      .select(`
-        *,
-        reactions:message_reactions (
-          id,
-          emoji,
-          user_id,
-          created_at,
-          user:users (
-            id,
-            username,
-            display_name,
-            avatar_url
-          )
-        )
-      `)
+      .select('*')
       .eq('conversation_id', conversationId)
       .order('created_at', { ascending: false })
       .limit(limit);
@@ -107,9 +93,43 @@ export class MessageService {
     const { data, error } = await query;
     if (error) throw new Error(error.message);
 
+    // Load reactions separately to avoid relationship issues
+    const messageIds = data.map(m => m.id);
+    let reactions = [];
+    
+    if (messageIds.length > 0) {
+      const { data: reactionsData } = await supabaseAdmin
+        .from('message_reactions')
+        .select('*')
+        .in('message_id', messageIds);
+      
+      if (reactionsData && reactionsData.length > 0) {
+        // Get unique user IDs from reactions
+        const userIds = [...new Set(reactionsData.map(r => r.user_id))];
+        
+        // Load user data
+        const { data: usersData } = await supabaseAdmin
+          .from('users')
+          .select('id, username, display_name, avatar_url')
+          .in('id', userIds);
+        
+        // Map users to reactions (use 'user' for consistency with frontend)
+        reactions = reactionsData.map(reaction => ({
+          ...reaction,
+          user: usersData?.find(u => u.id === reaction.user_id) || null
+        }));
+      }
+    }
+
+    // Attach reactions to messages
+    const messagesWithReactions = data.map(message => ({
+      ...message,
+      reactions: reactions.filter(r => r.message_id === message.id)
+    }));
+
     // Enrich messages with status data
     const enrichedMessages = await Promise.all(
-      data.map(async (message) => {
+      messagesWithReactions.map(async (message) => {
         try {
           // Get status for this message and current user
           const { data: status } = await supabaseAdmin
@@ -199,44 +219,59 @@ export class MessageService {
   }
 
   // ===============================
-  // REACTIONS
+  // REACTIONS (Telegram-style: One reaction per user per message)
   // ===============================
   static async addReaction(messageId, userId, emoji) {
-    // Check if reaction already exists
-    const { data: existing } = await supabaseAdmin
+    // Check if user already has ANY reaction on this message
+    const { data: existingReactions } = await supabaseAdmin
       .from('message_reactions')
-      .select('id')
+      .select('id, emoji')
       .eq('message_id', messageId)
-      .eq('user_id', userId)
-      .eq('emoji', emoji)
-      .single();
+      .eq('user_id', userId);
 
-    if (existing) {
-      // Remove reaction (toggle off)
-      await supabaseAdmin
-        .from('message_reactions')
-        .delete()
-        .eq('id', existing.id);
-      return null; // Return null to indicate removal
+    // If user clicked the same emoji they already have, remove it (toggle off)
+    if (existingReactions && existingReactions.length > 0) {
+      const sameEmojiReaction = existingReactions.find(r => r.emoji === emoji);
+      
+      if (sameEmojiReaction) {
+        // Remove the existing reaction (toggle off)
+        await supabaseAdmin
+          .from('message_reactions')
+          .delete()
+          .eq('id', sameEmojiReaction.id);
+        return null; // Return null to indicate removal
+      } else {
+        // User clicked a different emoji - replace the old one
+        // Delete all existing reactions from this user on this message
+        await supabaseAdmin
+          .from('message_reactions')
+          .delete()
+          .eq('message_id', messageId)
+          .eq('user_id', userId);
+      }
     }
 
-    // Add new reaction
-    const { data, error } = await supabaseAdmin
+    // Add new reaction - load user data separately to avoid relationship issues
+    const { data: reaction, error } = await supabaseAdmin
       .from('message_reactions')
       .insert({ message_id: messageId, user_id: userId, emoji })
-      .select(`
-        *,
-        user:users (
-          id,
-          username,
-          display_name,
-          avatar_url
-        )
-      `)
+      .select('*')
       .single();
 
     if (error) throw new Error(error.message);
-    return data;
+
+    // Load user data separately
+    const { data: userData } = await supabaseAdmin
+      .from('users')
+      .select('id, username, display_name, avatar_url')
+      .eq('id', userId)
+      .single();
+
+    // Attach user data to reaction (use 'user' for consistency with frontend)
+    return {
+      ...reaction,
+      user: userData || null
+    };
   }
 
   // ===============================
@@ -297,9 +332,13 @@ export class MessageService {
         created_at: new Date().toISOString()
       }));
 
+      // Use upsert to handle duplicates gracefully
       const { error } = await supabaseAdmin
         .from('message_status')
-        .insert(statusRecords);
+        .upsert(statusRecords, {
+          onConflict: 'message_id,user_id',
+          ignoreDuplicates: false // Update if exists
+        });
 
       if (error) {
         console.error('Failed to create message status:', error);
